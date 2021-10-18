@@ -1,3 +1,4 @@
+import { spawn } from "child_process";
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import S3 from "aws-sdk/clients/s3";
@@ -14,6 +15,8 @@ import { getObject, s3Options } from "../../common/s3-wrapper";
 interface Layers {
   [s3URI: string]: Promise<GeoUnitTopology | GeoUnitProperties | void>;
 }
+
+const MAX_RETRIES = 5;
 
 @Injectable()
 export class TopologyService {
@@ -114,7 +117,14 @@ export class TopologyService {
       this.logger.error(
         `Failed to load topology for '${s3URI}' ${numRetries + 1} times, err ${err}`
       );
-      return this.fetchLayer(s3URI, archived, numRetries + 1);
+      if (numRetries < MAX_RETRIES) {
+        return this.fetchLayer(s3URI, archived, numRetries + 1);
+      } else {
+        // Nest spawns multiple processes, so to shutdown the main container process we need to
+        // kill all running node instances
+        await spawn("pkill", ["node"]).killed;
+        process.exit(1);
+      }
     }
   }
 
