@@ -109,9 +109,9 @@ it when necessary (file sizes ~1GB+).
       To create multiple groups, use the -d option once per group.
       e.g. -d population,white,black,asian,hispanic,other -d "VAP,VAP White, VAP Black, VAP Asian, VAP Hispanic, VAP Other" 
       `,
-      default: "population,white,black,asian,hispanic,other",
+      default: ["population,white,black,asian,hispanic,other"],
       multiple: true
-    } as const),
+    }),
 
     voting: flags.string({
       char: "v",
@@ -172,9 +172,7 @@ it when necessary (file sizes ~1GB+).
     const votingIds = voting.map(([, id]) => id);
     const minZooms = flags.levelMinZoom.split(",");
     const maxZooms = flags.levelMaxZoom.split(",");
-    // Setting 'multiple: true' makes this return an array, but the inferred type didn't get the message
-    const demographicsFlags = (flags.demographics as unknown) as readonly string[];
-    const demographics = splitPairs(demographicsFlags.join(","));
+    const demographics = splitPairs(flags.demographics.join(","));
     const demographicIds = demographics.map(([, id]) => id);
     const simplification = parseFloat(flags.simplification);
     const quantization = parseFloat(flags.quantization);
@@ -300,7 +298,7 @@ it when necessary (file sizes ~1GB+).
       votingMetaData,
       bbox,
       geoLevelHierarchyInfo,
-      this.getDemographicsGroups(demographicsFlags)
+      this.getDemographicsGroups(flags.demographics)
     );
   }
 
