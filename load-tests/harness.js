@@ -8,11 +8,10 @@ export const options = {
   vus: 1,
   iterations: 1,
   discardResponseBodies: true,
-  verbose: true,
   maxRedirects: 0,
-  thresholds: {
-    checks: [{ threshold: "rate==1", abortOnFail: true }],
-  },
+  // thresholds: {
+  //   checks: [{ threshold: "rate==1", abortOnFail: true }],
+  // },
 };
 
 const har = JSON.parse(open(`./${__ENV.HAR_FILE}`));
@@ -111,7 +110,10 @@ export default (data) => {
 
       responses.forEach((res) => {
         check(res, {
-          "is status 200": (r) => r.status === 200,
+          "is status 200": (r) => {
+            console.log(r.status);
+            return r.status === 200;
+          },
         });
       });
 

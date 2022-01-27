@@ -9,4 +9,4 @@ services:
       - PROJECT_UUIDS
     volumes:
       - ./:/scripts
-    command: run /scripts/harness.js
+    command: run -v /scripts/harness.js
