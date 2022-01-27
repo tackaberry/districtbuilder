@@ -12,6 +12,9 @@ module.exports = {
   entities: ["dist/**/*.entity.js"],
   subscribers: ["dist/server/subscriber/*.js"],
   migrations: ["dist/server/migrations/*.js"],
+  extra: {
+    max: 60
+  },
   cli: {
     entitiesDir: "src",
     migrationsDir: "migrations",
