@@ -14,6 +14,7 @@ export class GeoUnitProperties {
       geoUnitTopology.definition,
       geoUnitTopology.hierarchyDefinition,
       geoUnitTopology.staticMetadata,
+      geoUnitTopology.hierarchySize,
       geoUnitTopology.topologyProperties
     );
   }
@@ -22,6 +23,7 @@ export class GeoUnitProperties {
     public readonly definition: GeoUnitDefinition,
     public readonly hierarchyDefinition: HierarchyDefinition,
     public readonly staticMetadata: IStaticMetadata,
+    public readonly hierarchySize: number,
     public readonly topologyProperties: {
       readonly [layer: string]: readonly Record<string, unknown>[];
     }

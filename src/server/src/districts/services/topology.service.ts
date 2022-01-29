@@ -3,9 +3,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import S3 from "aws-sdk/clients/s3";
 import { spawn } from "child_process";
 import { cpus } from "os";
-import { Topology } from "topojson-specification";
 import { Repository } from "typeorm";
-import { deserialize } from "v8";
 
 import { TypedArrays, IStaticFile, IStaticMetadata, S3URI } from "../../../../shared/entities";
 import { RegionConfig } from "../../region-configs/entities/region-config.entity";
@@ -133,7 +131,8 @@ export class TopologyService {
         if (!geoLevelHierarchy) {
           this.logger.error(`geoLevelHierarchy missing from static metadata for ${s3URI}`);
         }
-        const topology = deserialize(topojsonBody) as Topology;
+        const topology = new Uint8Array(new SharedArrayBuffer(topojsonBody.length));
+        topology.set(topojsonBody);
         const [demographics, geoLevels, voting] = await Promise.all([
           this.fetchStaticFiles(s3URI, staticMetadata.demographics),
           this.fetchStaticFiles(s3URI, staticMetadata.geoLevels),
@@ -199,7 +198,11 @@ export class TopologyService {
               // in Node.js (see https://nodejs.org/api/buffer.html)
               const buf = res.Body as Buffer;
               const typedArray = new typedArrayConstructor(buf.buffer);
-              return typedArray;
+              const sharedBuffer = new typedArrayConstructor(
+                new SharedArrayBuffer(buf.byteLength + buf.byteOffset)
+              );
+              sharedBuffer.set(typedArray, 0);
+              return sharedBuffer;
             })
           )
         )

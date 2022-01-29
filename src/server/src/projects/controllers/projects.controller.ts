@@ -226,7 +226,7 @@ export class ProjectsController implements CrudController<Project> {
   ) {
     // Districts definition is optional. Use it if supplied, otherwise use all-unassigned.
     const districtsDefinition =
-      dto.districtsDefinition || new Array(geoCollection.hierarchy.length).fill(0);
+      dto.districtsDefinition || new Array(geoCollection.hierarchySize).fill(0);
     const lockedDistricts = new Array(dto.numberOfDistricts).fill(false);
     const numberOfMembers = dto.numberOfMembers || new Array(dto.numberOfDistricts).fill(1);
     return {
@@ -374,7 +374,7 @@ export class ProjectsController implements CrudController<Project> {
     readonly regionConfig: IRegionConfig;
   }): Promise<DistrictsGeoJSON> {
     const geoCollection = await this.getGeoUnitTopology(regionConfig.s3URI);
-    const geojson = geoCollection.merge({
+    const geojson = await geoCollection.merge({
       districtsDefinition,
       numberOfDistricts,
       user,

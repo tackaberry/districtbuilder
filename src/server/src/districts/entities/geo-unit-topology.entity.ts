@@ -1,5 +1,3 @@
-import { Feature, MultiPolygon as GeoJSONMultiPolygon } from "geojson";
-import * as topojson from "topojson-client";
 import {
   GeometryCollection,
   GeometryObject,
@@ -8,15 +6,10 @@ import {
   Topology
 } from "topojson-specification";
 import * as _ from "lodash";
-
-import area from "@turf/area";
-import length from "@turf/length";
-import polygonToLine from "@turf/polygon-to-line";
+import { spawn, Pool, Worker } from "threads";
+import { deserialize } from "v8";
 
 import {
-  Contiguity,
-  DistrictProperties,
-  GeoUnitCollection,
   GeoUnitDefinition,
   HierarchyDefinition,
   IStaticMetadata,
@@ -27,102 +20,18 @@ import {
   IUser,
   IChamber
 } from "../../../../shared/entities";
-import { getAllBaseIndices, getDemographics, getVoting } from "../../../../shared/functions";
 import { DistrictsGeoJSON } from "../../projects/entities/project.entity";
-import { mapValues } from "lodash";
+import { Functions } from "../../worker";
 
-interface GeoUnitPolygonHierarchy {
-  geom: Polygon | MultiPolygon;
-  children: ReadonlyArray<GeoUnitPolygonHierarchy>;
+const workerPool = Pool(() => spawn<Functions>(new Worker("../../worker")));
+
+export async function terminatePool() {
+  return workerPool.terminate();
 }
 
 type GroupedPolygons = {
   [groupName: string]: { [geounitId: string]: ReadonlyArray<Polygon | MultiPolygon> };
 };
-
-/*
- * Calculate Polsby-Popper compactness
- *
- * See https://fisherzachary.github.io/public/r-output.html#polsby-popper
- */
-function calcPolsbyPopper(feature: Feature): [number, Contiguity] {
-  if (
-    feature.geometry &&
-    feature.geometry.type === "MultiPolygon" &&
-    feature.geometry.coordinates.length === 0
-  ) {
-    return [0, ""];
-  }
-  if (
-    feature.geometry &&
-    feature.geometry.type === "MultiPolygon" &&
-    feature.geometry.coordinates.length > 1
-  ) {
-    return [0, "non-contiguous"];
-  }
-  const districtArea: number = area(feature);
-  // @ts-ignore
-  const outline = polygonToLine(feature);
-  const districtPerimeter: number = length(outline, { units: "meters" });
-  return [(4 * Math.PI * districtArea) / districtPerimeter ** 2, "contiguous"];
-}
-
-// Creates a list of trees for the nested geometries of the geounits
-// This matches the possible structure of the DistrictDefinition
-//
-// We'll walk this hierarchy in conjuction with the district definition later
-// to get the geometries needed to build our GeoJSON
-function group(
-  topology: Topology,
-  definition: GeoUnitDefinition
-): ReadonlyArray<GeoUnitPolygonHierarchy> {
-  // Run through all topology objects in a single pass and build up a list of
-  // them keyed by their parent geometries ID, which we'll use to quickly look
-  // up child geometries when we build up our list of trees later in getNode
-  const geounitsByParentId = definition.groups.map((groupName, index) => {
-    const parentCollection = topology.objects[groupName] as GeometryCollection;
-    const mutableMappings: {
-      [geounitId: string]: Array<Polygon | MultiPolygon>;
-    } = Object.fromEntries(
-      parentCollection.geometries.map((geom: GeometryObject<any>) => [
-        geom.properties[groupName],
-        []
-      ])
-    );
-    const childGroupName = definition.groups[index + 1];
-    if (childGroupName) {
-      const childCollection = topology.objects[childGroupName] as GeometryCollection;
-      childCollection.geometries.forEach((geometry: GeometryObject<any>) => {
-        if (geometry.type === "Polygon" || geometry.type === "MultiPolygon") {
-          mutableMappings[geometry.properties[groupName]].push(geometry);
-        }
-      });
-    }
-    return [groupName, mutableMappings];
-  });
-
-  const firstGroup = definition.groups[0];
-  const toplevelCollection = topology.objects[firstGroup] as GeometryCollection<any>;
-  const geounits: GroupedPolygons = Object.fromEntries(geounitsByParentId);
-  return toplevelCollection.geometries.map(geom => getNode(geom, definition, geounits));
-}
-
-function getNode(
-  geometry: GeometryObject<any>,
-  definition: GeoUnitDefinition,
-  geounitsByParentId: GroupedPolygons
-): GeoUnitPolygonHierarchy {
-  const firstGroup = definition.groups[0];
-  const remainingGroups = definition.groups.slice(1);
-  const geomId = geometry.properties[firstGroup];
-  const childGeoms = geounitsByParentId[firstGroup][geomId];
-  return {
-    geom: geometry,
-    children: childGeoms.map(childGeom =>
-      getNode(childGeom, { ...definition, groups: remainingGroups }, geounitsByParentId)
-    )
-  } as GeoUnitPolygonHierarchy;
-}
 
 // Groups a topology into a hierarchy of geounits corresponding to a geo unit definition structure.
 // Note: this function, along with getNodeForHierarchy are copy-pasted directly (w/rename) from
@@ -181,27 +90,28 @@ function getNodeForHierarchy(
       childGeoms.map((childGeom: any) => childGeom.id);
 }
 
-type FeatureProperties = Pick<DistrictProperties, "demographics" | "voting">;
-
 export class GeoUnitTopology {
-  public readonly hierarchy: ReadonlyArray<GeoUnitPolygonHierarchy>;
+  public readonly hierarchySize: number;
 
   constructor(
-    public readonly topology: Topology,
+    public readonly topology: Uint8Array,
     public readonly definition: GeoUnitDefinition,
     public readonly staticMetadata: IStaticMetadata,
     public readonly demographics: TypedArrays,
     public readonly voting: TypedArrays,
     public readonly geoLevels: TypedArrays
   ) {
-    this.hierarchy = group(topology, definition);
+    const topo = deserialize(this.topology) as Topology;
+    const firstGroup = definition.groups[0];
+    const toplevelCollection = topo.objects[firstGroup] as GeometryCollection<any>;
+    this.hierarchySize = toplevelCollection.geometries.length;
   }
 
   /*
    * Performs a merger of the specified districts into a GeoJSON collection,
    * or returns null if the district definition is invalid
    */
-  merge({
+  async merge({
     districtsDefinition,
     numberOfDistricts,
     user,
@@ -213,98 +123,22 @@ export class GeoUnitTopology {
     readonly user: IUser;
     readonly chamber?: IChamber;
     readonly regionConfig: IRegionConfig;
-  }): DistrictsGeoJSON | null {
-    // mutableDistrictGeoms contains the individual geometries prior to being merged
-    // indexed by district id then by geolevel index
-    const mutableDistrictGeoms: Array<Array<Array<MultiPolygon | Polygon>>> = Array.from(
-      Array(numberOfDistricts + 1)
-    ).map(_ => this.staticMetadata.geoLevelHierarchy.map(_ => []));
-    const addToDistrict = (
-      elem: GeoUnitCollection,
-      hierarchy: GeoUnitPolygonHierarchy,
-      level = 0
-    ): boolean => {
-      if (Array.isArray(elem)) {
-        // If the array length doesn't match the length of our current place in
-        // the hierarchy, the district definition is invalid
-        if (elem.length !== hierarchy.children.length) {
-          return false;
-        }
-        return elem.every((subelem: GeoUnitCollection, idx: number) =>
-          addToDistrict(subelem, hierarchy.children[idx], level + 1)
-        );
-      } else if (typeof elem === "number" && elem >= 0) {
-        const districtIndex = elem;
-        mutableDistrictGeoms[districtIndex][level].push(hierarchy.geom);
-        return true;
-      }
-      // Elements that are not non-negative numbers or arrays of the same are invalid
-      return false;
-    };
-
-    const valid =
-      districtsDefinition.length === this.hierarchy.length &&
-      districtsDefinition.every((elem, idx) => addToDistrict(elem, this.hierarchy[idx]));
-
-    if (!valid) {
-      return null;
-    }
-
-    const merged = mutableDistrictGeoms.map((geometries, idx) => {
-      const mutableGeom = topojson.mergeArcs(this.topology, geometries.flat());
-      const baseIndices = geometries.reduce((indices: number[], levelGeometries, levelIndex) => {
-        const levelIds = levelGeometries
-          .map(geom => geom.id)
-          .filter(id => id !== undefined && typeof id === "number") as number[];
-        const levelIndices = getAllBaseIndices(
-          this.geoLevels.slice().reverse(),
-          levelIndex,
-          levelIds
-        );
-        return indices.concat(levelIndices);
-      }, []);
-      mutableGeom.id = idx;
-      const geom: MultiPolygon<FeatureProperties> = {
-        ...mutableGeom,
-        properties: {
-          demographics: getDemographics(baseIndices, this.staticMetadata, this.demographics),
-          voting: getVoting(baseIndices, this.staticMetadata, this.voting)
-        }
-      };
-      return geom;
-    });
-    const featureCollection = topojson.feature(this.topology, {
-      type: "GeometryCollection",
-      geometries: merged
-    });
-    return {
-      ...featureCollection,
-      // FeatureCollection objects cannot have 'properties' (RFC7964 Sec 7),
-      // but they can have other unrecognized fields (Sec 6.1)
-      // so we put all non-district data in this top-level metadata field
-      metadata: {
-        completed:
-          featureCollection.features[0].geometry.type === "MultiPolygon" &&
-          featureCollection.features[0].geometry.coordinates.length === 0,
+  }): Promise<DistrictsGeoJSON | null> {
+    return workerPool.queue(worker =>
+      worker.merge({
+        districtsDefinition,
+        numberOfDistricts,
+        user,
         chamber,
-        creator: _.pick(user, ["id", "name"]),
-        regionConfig: _.pick(regionConfig, ["id", "name", "regionCode", "countryCode", "s3URI"])
-      },
-      features: featureCollection.features.map(feature => {
-        const [compactness, contiguity] = calcPolsbyPopper(feature);
-        const geometry = feature.geometry as GeoJSONMultiPolygon;
-
-        return {
-          ...feature,
-          geometry,
-          properties: {
-            ...feature.properties,
-            compactness,
-            contiguity
-          }
-        };
+        regionConfig,
+        definition: this.definition,
+        staticMetadata: this.staticMetadata,
+        topologyBuf: this.topology,
+        demographics: this.demographics,
+        voting: this.voting,
+        geoLevels: this.geoLevels
       })
-    };
+    );
   }
 
   importFromCSV(blockToDistricts: { readonly [block: string]: number }): DistrictsDefinition {
@@ -336,7 +170,8 @@ export class GeoUnitTopology {
   }
 
   get topologyProperties() {
-    return mapValues(this.topology.objects, collection =>
+    const topology = deserialize(this.topology) as Topology;
+    return _.mapValues(topology.objects, collection =>
       collection.type === "GeometryCollection"
         ? collection.geometries.map(feature => feature.properties || {})
         : []
@@ -345,8 +180,9 @@ export class GeoUnitTopology {
 
   // Generates the geounit hierarchy corresponding to a geo unit definition structure
   get hierarchyDefinition() {
+    const topology = deserialize(this.topology) as Topology;
     const geoLevelIds = this.staticMetadata.geoLevelHierarchy.map(level => level.id);
     const definition = { groups: geoLevelIds.slice().reverse() };
-    return groupForHierarchy(this.topology, definition);
+    return groupForHierarchy(topology, definition);
   }
 }

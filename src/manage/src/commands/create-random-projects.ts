@@ -81,7 +81,7 @@ export default class CreateRandomProjects extends Command {
       }
       const lockedDistricts = new Array(numberOfDistricts).fill(false);
       const numberOfMembers = new Array(numberOfDistricts).fill(1);
-      const districts = geoCollection.merge({
+      const districts = await geoCollection.merge({
         districtsDefinition,
         numberOfDistricts,
         user,
