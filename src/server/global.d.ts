@@ -20,3 +20,12 @@ declare module "simplify-geojson" {
 
   export function simplify(feature: GeoJSON, tolerance?: number): void;
 }
+
+declare module "geobuf" {
+  import Pbf = require("pbf");
+  import { GeoJSON } from "geojson";
+  import { Topology } from "topojson-specification";
+
+  export function decode(pbf: Pbf): GeoJSON | Topology;
+  export function encode(obj: GeoJSON | Topology, pbf: Pbf): Uint8Array;
+}

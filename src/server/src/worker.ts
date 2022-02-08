@@ -13,7 +13,8 @@ import {
   Polygon,
   Topology
 } from "topojson-specification";
-import { deserialize } from "v8";
+import Pbf from "pbf";
+import * as geobuf from "geobuf";
 
 import {
   Contiguity,
@@ -150,7 +151,9 @@ function merge({
   readonly voting: TypedArrays;
   readonly geoLevels: TypedArrays;
 }): DistrictsGeoJSON | null {
-  const topology = deserialize(topologyBuf) as Topology;
+  console.time("decode");
+  const topology = geobuf.decode(new Pbf(topologyBuf)) as Topology;
+  console.timeEnd("decode");
   const hierarchy = group(topology, definition);
   // mutableDistrictGeoms contains the individual geometries prior to being merged
   // indexed by district id then by geolevel index

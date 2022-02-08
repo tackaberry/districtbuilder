@@ -4,6 +4,9 @@ import S3 from "aws-sdk/clients/s3";
 import { spawn } from "child_process";
 import { cpus } from "os";
 import { Repository } from "typeorm";
+import Pbf from "pbf";
+import * as geobuf from "geobuf";
+import { Topology } from "topojson-specification";
 
 import { TypedArrays, IStaticFile, IStaticMetadata, S3URI } from "../../../../shared/entities";
 import { RegionConfig } from "../../region-configs/entities/region-config.entity";
@@ -11,6 +14,7 @@ import { GeoUnitTopology } from "../entities/geo-unit-topology.entity";
 import { GeoUnitProperties } from "../entities/geo-unit-properties.entity";
 import _ from "lodash";
 import { getObject, s3Options } from "../../common/s3-wrapper";
+import { deserialize } from "v8";
 
 const MAX_RETRIES = 5;
 // Loading a topojson layer is a mix of I/O and CPU intensive work,
@@ -124,7 +128,10 @@ export class TopologyService {
       ]);
 
       const staticMetadataBody = staticMetadataResponse.Body?.toString("utf8");
-      const topojsonBody = topojsonResponse.Body as Buffer;
+      // Hilarity ensues - decode from v8 and re-encode into PBF
+      // doing this to test if PBF is fast enough for sharing between threads
+      const topo = deserialize(topojsonResponse.Body as Buffer) as Topology;
+      const topojsonBody = geobuf.encode(topo, new Pbf());
       if (staticMetadataBody && topojsonBody) {
         const staticMetadata = JSON.parse(staticMetadataBody) as IStaticMetadata;
         const geoLevelHierarchy = staticMetadata.geoLevelHierarchy.map(gl => gl.id);

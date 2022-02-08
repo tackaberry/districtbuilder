@@ -7,7 +7,7 @@ import {
 } from "topojson-specification";
 import * as _ from "lodash";
 import { spawn, Pool, Worker } from "threads";
-import { deserialize } from "v8";
+import * as geobuf from "geobuf";
 
 import {
   GeoUnitDefinition,
@@ -22,6 +22,7 @@ import {
 } from "../../../../shared/entities";
 import { DistrictsGeoJSON } from "../../projects/entities/project.entity";
 import { Functions } from "../../worker";
+import Pbf from "pbf";
 
 const workerPool = Pool(() => spawn<Functions>(new Worker("../../worker")));
 
@@ -101,7 +102,7 @@ export class GeoUnitTopology {
     public readonly voting: TypedArrays,
     public readonly geoLevels: TypedArrays
   ) {
-    const topo = deserialize(this.topology) as Topology;
+    const topo = geobuf.decode(new Pbf(this.topology)) as Topology;
     const firstGroup = definition.groups[0];
     const toplevelCollection = topo.objects[firstGroup] as GeometryCollection<any>;
     this.hierarchySize = toplevelCollection.geometries.length;
@@ -170,7 +171,7 @@ export class GeoUnitTopology {
   }
 
   get topologyProperties() {
-    const topology = deserialize(this.topology) as Topology;
+    const topology = geobuf.decode(new Pbf(this.topology)) as Topology;
     return _.mapValues(topology.objects, collection =>
       collection.type === "GeometryCollection"
         ? collection.geometries.map(feature => feature.properties || {})
@@ -180,7 +181,7 @@ export class GeoUnitTopology {
 
   // Generates the geounit hierarchy corresponding to a geo unit definition structure
   get hierarchyDefinition() {
-    const topology = deserialize(this.topology) as Topology;
+    const topology = geobuf.decode(new Pbf(this.topology)) as Topology;
     const geoLevelIds = this.staticMetadata.geoLevelHierarchy.map(level => level.id);
     const definition = { groups: geoLevelIds.slice().reverse() };
     return groupForHierarchy(topology, definition);
