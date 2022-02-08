@@ -1,8 +1,9 @@
 import area from "@turf/area";
 import length from "@turf/length";
 import polygonToLine from "@turf/polygon-to-line";
-
 import { Feature, MultiPolygon as GeoJSONMultiPolygon } from "geojson";
+import LRU from "lru-cache";
+import os from "os";
 import _ from "lodash";
 import { expose } from "threads/worker";
 import * as topojson from "topojson-client";
@@ -26,7 +27,8 @@ import {
   GeoUnitDefinition,
   IStaticMetadata,
   TypedArrays,
-  DistrictProperties
+  DistrictProperties,
+  S3URI
 } from "../../shared/entities";
 import { getAllBaseIndices, getDemographics, getVoting } from "../../shared/functions";
 import { DistrictsGeoJSON } from "./projects/entities/project.entity";
@@ -41,6 +43,21 @@ type GroupedPolygons = {
 };
 
 type FeatureProperties = Pick<DistrictProperties, "demographics" | "voting">;
+
+// @ts-ignore
+const cachedTopology = new LRU<string, Topology>({
+  maxSize: Math.ceil(os.totalmem() / (os.cpus().length + 2))
+});
+
+function getOrDecode(s3URI: S3URI, topologyBuf: Uint8Array) {
+  const cachedLayer = cachedTopology.get(s3URI);
+  if (cachedLayer) {
+    return cachedLayer;
+  }
+  const layer = geobuf.decode(new Pbf(topologyBuf)) as Topology;
+  cachedTopology.set(s3URI, layer);
+  return layer;
+}
 
 // Creates a list of trees for the nested geometries of the geounits
 // This matches the possible structure of the DistrictDefinition
@@ -151,9 +168,7 @@ function merge({
   readonly voting: TypedArrays;
   readonly geoLevels: TypedArrays;
 }): DistrictsGeoJSON | null {
-  console.time("decode");
-  const topology = geobuf.decode(new Pbf(topologyBuf)) as Topology;
-  console.timeEnd("decode");
+  const topology = getOrDecode(regionConfig.s3URI, topologyBuf);
   const hierarchy = group(topology, definition);
   // mutableDistrictGeoms contains the individual geometries prior to being merged
   // indexed by district id then by geolevel index
@@ -244,8 +259,13 @@ function merge({
   };
 }
 
+function hasLayer(s3URI: S3URI): boolean {
+  return cachedTopology.has(s3URI);
+}
+
 const functions = {
-  merge
+  merge,
+  hasLayer
 };
 
 export type Functions = typeof functions;

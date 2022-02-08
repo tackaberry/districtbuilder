@@ -24,11 +24,17 @@ import { DistrictsGeoJSON } from "../../projects/entities/project.entity";
 import { Functions } from "../../worker";
 import Pbf from "pbf";
 
-const workerPool = Pool(() => spawn<Functions>(new Worker("../../worker")));
+const NUM_WORKERS = 8;
 
+// Used for tests
 export async function terminatePool() {
   return workerPool.terminate();
 }
+
+const workerPool = _.range(NUM_WORKERS).map(() =>
+  Pool(() => spawn<Functions>(new Worker("../../worker")), 1)
+);
+type WorkerPool = typeof workerPool;
 
 type GroupedPolygons = {
   [groupName: string]: { [geounitId: string]: ReadonlyArray<Polygon | MultiPolygon> };
@@ -125,7 +131,39 @@ export class GeoUnitTopology {
     readonly chamber?: IChamber;
     readonly regionConfig: IRegionConfig;
   }): Promise<DistrictsGeoJSON | null> {
-    return workerPool.queue(worker =>
+    const settledWorkers = [
+      ...(await Promise.all(
+        workerPool.map(pool =>
+          Promise.race([
+            pool.settled(true).then(() => {
+              return [true, pool];
+            }),
+            new Promise(res => setTimeout(() => res([false, pool]), 1))
+          ])
+        )
+      ))
+      // @ts-ignore
+    ].flatMap(([settled, pool]: [boolean, unknown]) => {
+      return settled ? [pool] : [];
+    }) as WorkerPool;
+
+    const workersWithRegion = [
+      ...(await Promise.all(
+        settledWorkers.map(pool =>
+          pool.queue(worker =>
+            worker.hasLayer(regionConfig.s3URI).then(hasLayer => [hasLayer, pool])
+          )
+        )
+      ))
+    ].flatMap(([hasLayer, pool]: [boolean, unknown]) => {
+      return hasLayer ? [pool] : [];
+    }) as WorkerPool;
+    const worker =
+      workersWithRegion.length > 0 ? _.sample(workersWithRegion) : _.sample(workerPool);
+
+    /* eslint-disable */
+    // @ts-ignore
+    return worker.queue(worker =>
       worker.merge({
         districtsDefinition,
         numberOfDistricts,
@@ -140,6 +178,7 @@ export class GeoUnitTopology {
         geoLevels: this.geoLevels
       })
     );
+    /* eslint-enable */
   }
 
   importFromCSV(blockToDistricts: { readonly [block: string]: number }): DistrictsDefinition {
